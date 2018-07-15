@@ -63,6 +63,7 @@
 		+ [job_memory_sustain](#job_memory_sustain)
 		+ [job_cpu_max](#job_cpu_max)
 		+ [job_cpu_sustain](#job_cpu_sustain)
+		+ [job_log_max_size](#job_log_max_size)
 		+ [job_env](#job_env)
 		+ [server_comm_use_hostnames](#server_comm_use_hostnames)
 		+ [web_socket_use_hostnames](#web_socket_use_hostnames)
@@ -136,6 +137,8 @@
 	* [Sample Perl Plugin](#sample-perl-plugin)
 	* [Sample PHP Plugin](#sample-php-plugin)
 	* [Built-in Shell Plugin](#built-in-shell-plugin)
+	* [Built-in HTTP Request Plugin](#built-in-http-request-plugin)
+		+ [HTTP Request Chaining](#http-request-chaining)
 - [Command Line](#command-line)
 	* [Starting and Stopping](#starting-and-stopping)
 	* [Storage Maintenance](#storage-maintenance)
@@ -145,6 +148,7 @@
 	* [Data Import and Export](#data-import-and-export)
 	* [Storage Migration Tool](#storage-migration-tool)
 - [Inner Workings](#inner-workings)
+	* [Cron Noncompliance](#cron-noncompliance)
 	* [Storage](#storage)
 	* [Logs](#logs)
 	* [Keeping Time](#keeping-time)
@@ -304,6 +308,7 @@ For teams setting up multi-server clusters, here are some operational concerns t
 * All servers need to have at least one active IPv4 interface.
 * For the "live log" feature in the UI to work, the user needs a network route to the server running the job, via its hostname.
 * If you have to change any server IP addresses, they'll have to be removed and re-added to the cluster.
+* See the [Cron Noncompliance](#cron-noncompliance) section for differences in how Cronicle schedules events, versus the Unix Cron standard.
 
 # Configuration
 
@@ -518,6 +523,12 @@ When using the [job_cpu_max](#job_cpu_max) feature, you can optionally specify h
 
 CPU limits can also be customized in the UI per each category and/or per each event (see [Event Resource Limits](#event-resource-limits) below).  Doing either overrides the master default.
 
+### job_log_max_size
+
+This parameter allows you to set a default log file size limit for jobs, specified in bytes.  If the file size limit is exceeded, the job is aborted.  The default value is `0` (disabled).
+
+Job log file size limits can also be customized in the UI per each category and/or per each event (see [Event Resource Limits](#event-resource-limits) below).  Doing either overrides the master default.
+
 ### job_env
 
 Place any key/value pairs you want into the `job_env` object, and they will become environment variables passed to all job processes, as they are spawned.  Note that these can be overridden by event parameters with the same names.  The `job_env` can be thought of as a way to specify universal default environment variables for all your jobs.  Example:
@@ -610,7 +621,11 @@ To use Amazon S3 as a backing store for Cronicle, please read the [Amazon S3 sec
 			"secretAccessKey": "YOUR_AMAZON_SECRET_KEY", 
 			"region": "us-west-1",
 			"correctClockSkew": true,
-			"maxRetries": 5
+			"maxRetries": 5,
+			"httpOptions": {
+				"connectTimeout": 5000,
+				"timeout": 5000
+			}
 		},
 		"S3": {
 			"keyPrefix": "cronicle",
@@ -1123,9 +1138,9 @@ Only a small subset of the properties shown above will be included with a `job_l
 
 #### Event Resource Limits
 
-![Resource Limits Screenshot](https://pixlcore.com/software/cronicle/screenshots-new/edit-event-res-limits.png)
+![Resource Limits Screenshot](https://pixlcore.com/software/cronicle/screenshots-new/edit-event-res-limits-new.png)
 
-Cronicle can automatically limit the server resource consumption of your jobs, by monitoring their CPU and RAM usage, and aborting them if the limits are exceeded.  You can also specify "sustain" times, so no action is taken until the limits are exceeded for a certain amount of time.
+Cronicle can automatically limit the server resource consumption of your jobs, by monitoring their CPU, memory and/or log file size, and aborting them if your limits are exceeded.  You can also specify "sustain" times for CPU and memory, so no action is taken until the limits are exceeded for a certain amount of time.
 
 CPU and RAM usage are measured every 10 seconds, by looking at the process spawned for the job, *and any child processes that may have also been spawned by your code*.  So if you fork your own child subprocess, or shell out to a command-line utility, all the memory is totaled up, and compared against the resource limits for the job.
 
@@ -1966,6 +1981,80 @@ echo "75%"
 
 This would allow Cronicle to show a graphical progress bar on the [Home](#home-tab) and [Job Details](#job-details-tab) tabs, and estimate the time remaining based on the elapsed time and current progress.
 
+**Pro-Tip:** The Shell Plugin actually supports any interpreted scripting language, including Node.js, PHP, Perl, Python, and more.  Basically, any language that supports a [Shebang](https://en.wikipedia.org/wiki/Shebang_%28Unix%29) line will work in the Shell Plugin.  Just change the `#!/bin/sh` to point to your interpreter binary of choice.
+
+## Built-in HTTP Request Plugin
+
+Cronicle ships with a built-in "HTTP Request" Plugin, which you can use to send simple GET, HEAD or POST requests to any URL, and log the response.  You can specify custom HTTP request headers, and also supply regular expressions to match a successful response based on the content.  Here is the user interface when selected:
+
+![HTTP Request Plugin](https://pixlcore.com/software/cronicle/screenshots-new/http-request-plugin.png)
+
+Here are descriptions of the parameters:
+
+| Plugin Parameter | Description |
+|------------------|-------------|
+| **Method** | Select the HTTP request method, either GET, HEAD or POST. |
+| **URL** | Enter your fully-qualified URL here, which must begin with either `http://` or `https://`. |
+| **Headers** | Optionally include any custom request headers here, one per line. |
+| **POST Data** | If you are sending a HTTP POST, enter the raw POST data here. |
+| **Timeout** | Enter the timeout in seconds, which is measured as the time to first byte in the response. |
+| **Follow Redirects** | Check this box to automatically follow HTTP redirect responses (up to 32 of them). |
+| **SSL Cert Bypass** | Check this box if you need to make HTTPS requests to servers with invalid SSL certificates (self-signed or other). |
+| **Success Match** | Optionally enter a regular expression here, which is matched against the response body.  If specified, this must match to consider the job a success. |
+| **Error Match** | Optionally enter a regular expression here, which is matched against the response body.  If this matches the response body, then the job is aborted with an error. |
+
+### HTTP Request Chaining
+
+The HTTP Request Plugin supports Cronicle's [Chain Reaction](#chain-reaction) system in two ways.  First, information about the HTTP response is passed into the [Chain Data](#chain-data) object, so downstream chained events can read and act on it.  Specifically, all the HTTP response headers, and possibly even the content body itself (if formatted as JSON and smaller than 1 MB) are included.  Example:
+
+```js
+"chain_data": {
+	"headers": {
+		"date": "Sat, 14 Jul 2018 20:14:01 GMT",
+		"server": "Apache/2.4.28 (Unix) LibreSSL/2.2.7 PHP/5.6.30",
+		"last-modified": "Sat, 14 Jul 2018 20:13:54 GMT",
+		"etag": "\"2b-570fb3c47e480\"",
+		"accept-ranges": "bytes",
+		"content-length": "43",
+		"connection": "close",
+		"content-type": "application/json",
+		"x-uuid": "7617a494-823f-4566-8f8b-f479c2a6e707"
+	},
+	"json": {
+		"key1": "value1",
+		"key2": 12345
+	}
+}
+```
+
+In this example an HTTP request was made that returned those specific response headers (the header names are converted to lower-case), and the body was also formatted as JSON, so the JSON data itself is parsed and included in a property named `json`.  Downstream events that are chain-linked to the HTTP Request event can read these properties and act on them.
+
+Secondly, you can chain an HTTP Request into *another* HTTP Request, and use the chained data values from the previous response in the next request.  To do this, you need to utilize a special `[/bracket/slash]` placeholder syntax in the second request, to lookup values in the `chain_data` object from the first one.  You can use these placeholders in the **URL**, **Request Headers** and **POST Data** text fields.  Example:
+
+![HTTP Request Chain Data](https://pixlcore.com/software/cronicle/screenshots-new/http-request-chained.png)
+
+Here you can see we are using two placeholders, one in the URL and another in the HTTP request headers.  These are looking up values from a *previous* HTTP Request event, and passing them into the next request.  Specifically, we are using:
+
+| Placeholder | Description |
+|-------------|-------------|
+| `[/chain_data/json/key1]` | This placeholder is looking up the `key` value from the JSON data (body content) of the previous HTTP response.  Using our example response shown above, this would resolve to `value1`. |
+| `[/chain_data/headers/x-uuid]` | This placeholder is looking up the `X-UUID` response header from the previous HTTP response.  Using our example response shown above, this would resolve to `7617a494-823f-4566-8f8b-f479c2a6e707`. |
+
+So once the second request is sent off, after placeholder expansion the URL would actually resolve to:
+
+```
+http://myserver.com/test.json?key=value1
+```
+
+And the headers would expand to:
+
+```
+User-Agent: Mozilla/5.0
+X-UUID: 7617a494-823f-4566-8f8b-f479c2a6e707
+```
+
+You can chain as many requests together as you like, but note that each request can only see and act on chain data from the *previous* request (the one that directly chained to it).
+
 # Command Line
 
 Here are all the Cronicle services available to you on the command line.  Most of these are accessed via the following shell script:
@@ -2142,6 +2231,12 @@ The contents of the `NewStorage` object should match whatever you'd typically pu
 			"accessKeyId": "YOUR_AMAZON_ACCESS_KEY", 
 			"secretAccessKey": "YOUR_AMAZON_SECRET_KEY", 
 			"region": "us-west-1",
+			"correctClockSkew": true,
+			"maxRetries": 5,
+			"httpOptions": {
+				"connectTimeout": 5000,
+				"timeout": 5000
+			}
 		},
 		"S3": {
 			"keyPrefix": "cronicle",
@@ -2183,6 +2278,21 @@ Finally, restart Cronicle, and all should be well.
 # Inner Workings
 
 This section contains details on some of the inner workings of Cronicle.
+
+## Cron Noncompliance
+
+Cronicle has a custom-built scheduling system that is *loosely* based on Unix [Cron](https://en.wikipedia.org/wiki/Cron).  It does not, however, conform to the [specification](https://linux.die.net/man/5/crontab) written by [Paul Vixie](https://en.wikipedia.org/wiki/Paul_Vixie).  Namely, it differs in the following ways:
+
+- Month days and weekdays are intersected when both are present
+	-  If you specify both month days and weekdays, *both must match* for Cronicle to fire an event.  Vixie Cron behaves differently, in that it will fire if *either* matches.  This was a deliberate design decision to enable more flexibility in scheduling.
+
+When importing Crontab syntax:
+
+- Cronicle does not support the concept of running jobs on reboot, so the `@reboot` macro is disallowed.
+- If a 6th column is specified, it is assumed to be years.
+- Weekdays `0` and `7` are both considered to be Sunday.
+
+For more details on Cronicle's scheduler implementation, see the [Event Timing Object](#event-timing-object).
 
 ## Storage
 
@@ -2499,6 +2609,7 @@ Example response:
 		"cpu_sustain": 0,
 		"memory_limit": 0,
 		"memory_sustain": 0,
+		"log_max_size": 0,
 		"timezone": "America/Los_Angeles"
 	}
 }
@@ -2509,6 +2620,8 @@ In addition to the [Standard Response Format](#standard-response-format), this A
 The `event` object will contain the details for the requested event.  See the [Event Data Format](#event-data-format) section below for details on the event object properties themselves.
 
 If [Allow Queued Jobs](#allow-queued-jobs) is enabled on the event, the API response will also include a `queue` property, which will be set to the number of jobs currently queued up.
+
+If there are any active jobs currently running for the event, they will also be included in the response, in a `jobs` array.  Each job object will contain detailed information about the running job.  See [get_job_status](#get_job_status) below for more details.
 
 ### create_event
 
@@ -2536,6 +2649,7 @@ In addition to the required parameters, almost anything in the [Event Data Objec
 	"cpu_sustain": 0,
 	"detached": 0,
 	"enabled": 1,
+	"log_max_size": 0,
 	"max_children": 1,
 	"memory_limit": 0,
 	"memory_sustain": 0,
@@ -2611,6 +2725,7 @@ Example request with everything updated:
 	"cpu_sustain": 0,
 	"detached": 0,
 	"enabled": 1,
+	"log_max_size": 0,
 	"max_children": 1,
 	"memory_limit": 0,
 	"memory_sustain": 0,
@@ -2709,6 +2824,7 @@ Example request with everything customized:
 	"cpu_limit": 100,
 	"cpu_sustain": 0,
 	"detached": 0,
+	"log_max_size": 0,
 	"max_children": 1,
 	"memory_limit": 0,
 	"memory_sustain": 0,
@@ -2792,6 +2908,7 @@ Example response:
 		"memory_sustain": 0,
 		"cpu_limit": 0,
 		"cpu_sustain": 0,
+		"log_max_size": 0,
 		"retry_delay": 30,
 		"timezone": "America/New_York",
 		"source": "Manual (admin)",
@@ -2902,6 +3019,7 @@ This updates a job that is already in progress.  Only certain job properties may
 | `cpu_sustain` | (Optional) The number of seconds to allow the max CPU to be exceeded. |
 | `memory_limit` | (Optional) The maximum allowed memory usage (in bytes) before the job is aborted. |
 | `memory_sustain` | (Optional) The number of seconds to allow the max memory to be exceeded. |
+| `log_max_size` | (Optional) The maximum allowed job log file size (in bytes) before the job is aborted. |
 
 As shown above, you can include *some* of the properties from the [Event Data Object](#event-data-format) to customize the job in progress.  Example request:
 
@@ -2971,6 +3089,7 @@ Here are descriptions of all the properties in the event object, which is common
 | `detached` | Boolean | Specifies whether [Detached Mode](#detached-mode) is enabled or not. |
 | `enabled` | Boolean | Specifies whether the event is enabled (active in the scheduler) or not. |
 | `id` | String | A unique ID assigned to the event when it was first created. |
+| `log_max_size` | Number | Limit the job log file size to the specified amount, in bytes.  See [Event Resource Limits](#event-resource-limits). |
 | `max_children` | Number | The total amount of concurrent jobs allowed to run. See [Event Concurrency](#event-concurrency). |
 | `memory_limit` | Number | Limit the memory usage to the specified amount, in bytes. See [Event Resource Limits](#event-resource-limits). |
 | `memory_sustain` | Number | Only abort if the memory limit is exceeded for this many seconds. See [Event Resource Limits](#event-resource-limits). |

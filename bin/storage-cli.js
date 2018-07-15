@@ -69,7 +69,9 @@ var ip = '';
 var ifaces = os.networkInterfaces();
 var addrs = [];
 for (var key in ifaces) {
-	addrs = addrs.concat( addrs, ifaces[key] );
+	if (ifaces[key] && ifaces[key].length) {
+		Array.from(ifaces[key]).forEach( function(item) { addrs.push(item); } );
+	}
 }
 var addr = Tools.findObject( addrs, { family: 'IPv4', internal: false } );
 if (addr && addr.address && addr.address.match(/^\d+\.\d+\.\d+\.\d+$/)) {
@@ -93,6 +95,17 @@ var storage = new StandaloneStorage(config.Storage, function(err) {
 		verbose( "Switching to user: " + config.uid + "\n" );
 		process.setuid( config.uid );
 	}
+	
+	// custom job data expire handler
+	storage.addRecordType( 'cronicle_job', {
+		'delete': function(key, value, callback) {
+			storage.delete( key, function(err) {
+				storage.delete( key + '/log.txt.gz', function(err) {
+					callback();
+				} ); // delete
+			} ); // delete
+		}
+	} );
 	
 	// process command
 	var cmd = commands.shift();

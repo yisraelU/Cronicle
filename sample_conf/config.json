@@ -24,6 +24,7 @@
 	"udp_broadcast_port": 3014,
 	"scheduler_startup_grace": 10,
 	"universal_web_hook": "",
+	"track_manual_jobs": false,
 	
 	"server_comm_use_hostnames": 0,
 	"web_socket_use_hostnames": 0,
@@ -32,6 +33,7 @@
 	"job_memory_sustain": 0,
 	"job_cpu_max": 0,
 	"job_cpu_sustain": 0,
+	"job_log_max_size": 0,
 	"job_env": {},
 	
 	"client": {
@@ -61,6 +63,7 @@
 		"engine": "Filesystem",
 		"list_page_size": 50,
 		"concurrency": 4,
+		"log_event_types": { "get": 1, "put": 1, "head": 1, "delete": 1, "expire_set": 1 },
 		
 		"Filesystem": {
 			"base_dir": "data",
