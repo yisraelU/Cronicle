@@ -182,7 +182,7 @@ app.extend({
 			$('#d_tab_master').html( '' );
 			
 			$('div.header_clock_layer').fadeTo( 1000, 0 );
-			$('#d_tab_time').html( '' );
+			$('#d_tab_time > span').html( '' );
 			self.clock_visible = false;
 			self.checkScrollTime();
 			
@@ -257,6 +257,9 @@ app.extend({
 		if (!config.web_socket_use_hostnames && this.servers && this.servers[this.masterHostname] && this.servers[this.masterHostname].ip) {
 			// use ip instead of hostname if available
 			url = this.proto + this.servers[this.masterHostname].ip + ':' + this.port;
+		}
+		if (!config.web_direct_connect) {
+			url = this.proto + location.host;
 		}
 		Debug.trace("Websocket Connect: " + url);
 		
@@ -414,10 +417,15 @@ app.extend({
 		Debug.trace("New Master Hostname: " + hostname);
 		this.masterHostname = hostname;
 		
-		this.base_api_url = this.proto + this.masterHostname + ':' + this.port + config.base_api_uri;
-		if (!config.web_socket_use_hostnames && this.servers && this.servers[this.masterHostname] && this.servers[this.masterHostname].ip) {
-			// use ip instead of hostname if available
-			this.base_api_url = this.proto + this.servers[this.masterHostname].ip + ':' + this.port + config.base_api_uri;
+		if (config.web_direct_connect) {
+			this.base_api_url = this.proto + this.masterHostname + ':' + this.port + config.base_api_uri;
+			if (!config.web_socket_use_hostnames && this.servers && this.servers[this.masterHostname] && this.servers[this.masterHostname].ip) {
+				// use ip instead of hostname if available
+				this.base_api_url = this.proto + this.servers[this.masterHostname].ip + ':' + this.port + config.base_api_uri;
+			}
+		}
+		else {
+			this.base_api_url = this.proto + location.host + config.base_api_uri;
 		}
 		
 		Debug.trace("API calls now going to: " + this.base_api_url);
@@ -459,9 +467,15 @@ app.extend({
 		
 		// date/time in tab bar
 		// $('#d_tab_time, #d_scroll_time > span').html( get_nice_date_time( when, true, true ) );
-		$('#d_tab_time, #d_scroll_time > span').html(
-			get_nice_date_time( when, true, true ) + ' ' + 
-			moment.tz( when * 1000, app.tz).format("z") 
+		var num_active = num_keys( app.activeJobs || {} );
+		var nice_active = commify(num_active) + ' ' + pluralize('Job', num_active);
+		if (!num_active) nice_active = "Idle";
+		
+		$('#d_tab_time > span, #d_scroll_time > span').html(
+			// get_nice_date_time( when, true, true ) + ' ' + 
+			get_nice_time(when, true) + ' ' + 
+			moment.tz( when * 1000, app.tz).format("z") + ' - ' + 
+			nice_active
 		);
 	},
 	
